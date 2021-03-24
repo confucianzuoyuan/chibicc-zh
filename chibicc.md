@@ -2017,3 +2017,975 @@ $(OBJS): 9cc.h该规则表明所有.o文件都9cc.h依赖。因此9cc.h，如果
 >
 >在1970年代的某个时候，static如果我决定添加新的关键字而不是重复使用它们，那么我就不必更改很多代码，而是思考我会怎么做，这是一个难题。
 
+## 函数和局部变量
+
+在本章中，我们将实现函数和局部变量。它还实现了简单的控制结构。在本章的最后，您应该能够编译如下代码：
+
+```c
+// mからnまでを足す
+sum(m, n) {
+  acc = 0;
+  for (i = m; i <= n; i = i + 1)
+    acc = acc + i;
+  return acc;
+}
+
+main() {
+  return sum(1, 10); // 55を返す
+}
+```
+
+上面的代码与C仍有差距，但仍然与C相当。
+
+### 步骤9：1个字符的局部变量
+
+到上一章为止，我们已经为语言创建了一个编译器，可以执行四种算术运算。在本节中，我们将向语言添加功能以使变量可用。具体来说，目标是能够编译包含变量的多个语句，如下所示：
+
+```c
+a = 3;
+b = 5 * 6 - 8;
+a + b / 2;
+```
+
+假设最后一个表达式的结果是整个程序的计算结果。可以说，这种语言比只有四个算术运算的语言具有更多的“真实语言”氛围。
+
+在本章中，我们将首先解释如何实现变量，然后逐步实现变量。
+
+#### 堆栈上的可变区域
+
+C中的变量存在于内存中。可以说变量被称为内存地址。通过给存储器地址命名，a可以将其表示为“访问变量”，而不是将其表示为“访问存储器的地址0x6080” 。
+
+但是，对于每个函数调用，函数的局部变量必须分别存在。仅考虑实现的便利性，似乎很容易制作一个固定的地址，例如“将函数f的局部变量a放在地址0x6080处”，但f在递归调用时效果很好。在C语言中，将局部变量放在堆栈上，以便每个函数调用都有一个单独的局部变量。
+
+考虑一个具体示例的堆栈内容。假设您有一个带有局部变量的函数，a而其他一些函数调用了它。函数调用指令将返回地址压入堆栈，因此调用时的堆栈顶部将包含该返回地址。除此之外，假定堆栈最初包含一些值。由于此处的具体值并不重要，因此我们将使用“⋯⋯”。下图如下。bffcallf
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">返回地址</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+此处，符号“←RSP”用于指示RSP寄存器的当前值指向该地址。a并且b每个您的大小为8个字节。
+
+堆栈向下生长。从该状态开始a，b为了确保2个变量的面积，换句话说，您总共需要下推16字节的RSP。当您这样做时，您将获得：
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">返回地址</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">a</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">b</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+使用上面的布局，您可以a使用RSP + 8值和RSP值来访问b。以这种方式为每个功能调用分配的存储区称为“功能帧”或“激活记录”。
+
+更改RSP的字节数以及以这种方式将变量放置在这样保护的区域中的顺序对于其他功能是不可见的，因此可以方便地确定它们的大小，以方便编译器实现。
+
+基本上，局部变量就是这么简单地实现的。
+
+但是，此方法有一个缺点，因此您将必须使用另一个寄存器来实现实际的实现。回想一下，我们的编译器（和其他编译器）可以在执行函数时更改RSP。由于9cc使用RSP将计算结果推入/弹出到堆栈的中间，因此RSP的值经常变化。因此，a杀死b该用户将无法以相对于RSP的固定偏移量进行访问。
+
+解决此问题的一种常见方法是拥有一个与RSP分开的寄存器，该寄存器始终指向当前功能帧的开始。这种寄存器称为“基址寄存器”，其中包含的值称为“基址指针”。x86-64习惯将RBP寄存器用作基址寄存器。
+
+基本指针在函数执行期间不得更改（这就是我们拥有基本指针的原因）。从一个函数调用另一个函数并在返回时获得不同的值是不好的，因此您需要为每个函数调用保存原始的基本指针，并在返回之前将其写回。
+
+下图显示了使用基本指针的函数调用中的堆栈状态。带有is的局部变量x和y函数让我们假设您调用了。在执行期间，堆栈如下所示：gfg
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+如果f您从此处致电，它将处于以下状态。
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">fの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">a</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">b</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+这样，您始终可以访问aRBP-8和bRBP-16。考虑到创建此类堆栈状态的程序集，编译器应在每个函数的开头输出以下程序集。
+
+```
+push rbp
+mov rbp, rsp
+sub rsp, 16
+```
+
+这样的编译器在函数开始时输出的标准指令称为“序言”。请注意，实际上16必须是一个与每个函数的变量的数量和大小相匹配的值。
+
+让我们确保当我们使用指向返回地址的RSP运行上面的代码时，我们得到了我们期望的功能框架。每个指令的堆栈状态如下所示。
+
+1. f该call叫出后，立即栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+2. push rbp执行后堆栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">fの呼び出し時点のRBP</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+3. mov rbp, rsp执行后堆栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">fの呼び出し時点のRBP</td>
+<td>← RSP, RBP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+4. sub rsp, 16执行后堆栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">fの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">a</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">b</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+从函数返回时，将原始值写回RBP，以​​便RSP指向返回地址ret并调用该指令（该ret指令是从堆栈中弹出地址并跳转到该地址的指令）。可以将代码编写为：
+
+```
+mov rsp, rbp
+pop rbp
+ret
+```
+
+这样的编译器在函数末尾输出的标准指令称为“结尾”。
+
+执行结语时的堆栈状态如下所示。RSP指向的地址下方的堆栈区域不再被视为无效数据，因此在图中将其省略。
+
+1. mov rsp, rbp运行前堆叠
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">fの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">a</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">b</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+2. mov rsp, rbp执行后堆栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">fの呼び出し時点のRBP</td>
+<td>← RSP, RBP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+3. pop rbp执行后堆栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">fのリターンアドレス</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+4. ret执行后堆栈
+
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;">⋯⋯</td>
+<td></td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">gのリターンアドレス</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">gの呼び出し時点のRBP</td>
+<td>← RBP</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;">x</td>
+<td></td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;">y</td>
+<td>← RSP</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+这样，执行结尾g可以恢复调用函数的堆栈状态。call指令将指令call的地址堆栈在指令本身旁边。结语会ret弹出该地址并跳转到该地址，因此call功能g执行将在下一条指令处恢复。这些行为与我们所知道的功能的行为完全相同。
+
+通过这种方式，可以实现函数调用和函数局部变量。
+
+>列：堆栈增长方向
+>
+>如上所述，x86-64堆栈从较大的地址增长到较小的地址。堆叠沿相反的方向（即向上）延伸更自然，但是为什么堆叠设计为向下延伸呢？
+>
+>实际上，堆栈没有增长的技术上的必要性。在实际的CPU和ABI中，主流是将堆栈的起点设置为高位地址，然后向下扩展，但是也有一些体系结构，其中堆栈朝相反的方向增长，尽管极小。例如，使用8051微处理器，PA-RISC ABI 3，Multics 4等，堆栈向高位地址增长。
+>
+>但是，堆栈的向下设计并非不自然。
+>
+>刚接通电源后，CPU从空白状态开始执行程序时，通常由CPU的规格决定开始执行的地址。CPU的常见设计是从较低的地址（例如地址0）开始执行。通常，这会将程序代码放在一个较低的地址处。如果将堆栈放置得尽可能远，以使其不会与程序代码重叠并与程序代码重叠，则将堆栈放置在较高的地址处并设计为向地址空间的中心扩展。这将导致堆栈变小。
+>
+>当然，您可以想到与上面的CPU不同的设计，然后将堆栈扩展很自然。老实说，这是双方的事，而且事实是，业界普遍认为机器堆栈会减少。
+
+#### 更改令牌生成器
+
+现在您知道如何实现变量，让我们实现它。但是，突然变得难以支持任何数量的变量，因此我们决定在此步骤中将变量限制为一个小写字母，aRBP-8代表变量b，RBP-16代表变量c，RBP-24代表变量。变量始终存在，依此类推。字母有26个字符，因此，如果您决定将RSP下推26x8（即208个字节），则在调用该函数时，将为所有单字符变量留出空间。
+
+让我们现在实施它。首先，我们将修改分词器，以便除了常规的语法元素外，还可以对单字符变量进行分词。为此，您需要添加一个新的令牌类型。str成员可以读取变量名，因此Token无需在类型中添加新成员。结果，令牌类型如下所示：
+
+```c
+enum {
+  TK_RESERVED, // 記号
+  TK_IDENT,    // 識別子
+  TK_NUM,      // 整数トークン
+  TK_EOF,      // 入力の終わりを表すトークン
+} TokenKind;
+```
+
+如果TK_IDENT令牌使用小写字母，则对令牌生成器进行更改以创建类型的令牌。if您应该在令牌生成器中添加如下语句：
+
+```c
+if ('a' <= *p && *p <= 'z') {
+  cur = new_token(TK_IDENT, cur, p++);
+  cur->len = 1;
+  continue;
+}
+```
+
+#### 变更解析器
+
+在递归下降解析中，如果您知道语法，则可以将其机械地映射到函数调用。因此，为了考虑应该对解析器进行的更改，有必要考虑具有变量名（identifier）的新语法是什么。
+
+ident让我们使用一个标识符。这也是一个num终端符号。我可以在任何可以用于该变量的数值，所使用num的地方num | ident等等地方使用语法变量，该语法变量可以在与该数值相同的位置使用。
+
+除此之外，您还需要在语法中添加一个赋值表达式。除了分配变量别无选择，因此a=1我想使语法允许像这样的表达式。在这里，a=b=1让我们使用可以根据C编写如下的语法。
+
+另外，我希望能够编写由分号分隔的多个语句，因此结果是一个新的语法：
+
+```
+program    = stmt*
+stmt       = expr ";"
+expr       = assign
+assign     = equality ("=" assign)?
+equality   = relational ("==" relational | "!=" relational)*
+relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+add        = mul ("+" mul | "-" mul)*
+mul        = unary ("*" unary | "/" unary)*
+unary      = ("+" | "-")? primary
+primary    = num | ident | "(" expr ")"
+```
+
+首先42;，a=b=2; a+b;请编程例如，以确保您与该语法一致。之后，修改到目前为止创建的解析器，以便您可以解析上述语法。在此阶段，a+1=5您可以解析类似的表达式，但这是正确的。在以下路径中可以消除此类语义无效的表达式：修改解析器没有什么特别棘手的地方，您应该能够像以前一样直接将语法元素映射到函数调用。
+
+现在，我们有多个用分号分隔的表达式，作为解析的结果，我们需要将多个节点保存在某处。现在，准备以下全局数组并按顺序存储解析的结果节点。用NULL填充最后一个节点，以便您可以看到它的结束位置。以下是新添加的代码的一部分。
+
+```c
+Node *code[100];
+
+Node *assign() {
+  Node *node = equality();
+  if (consume("="))
+    node = new_node(ND_ASSIGN, node, assign());
+  return node;
+}
+
+Node *expr() {
+  return assign();
+}
+
+Node *stmt() {
+  Node *node = expr();
+  expect(";");
+  return node;
+}
+
+void program() {
+  int i = 0;
+  while (!at_eof())
+    code[i++] = stmt();
+  code[i] = NULL;
+}
+```
+
+抽象语法树需要能够重新表示“表示局部变量的节点”。为此，我们添加一种新的局部变量类型和该节点的新成员。例如，它应如下所示：在此数据结构中，解析器将ND_LVAR创建并返回一个类型为标识符token的节点。
+
+```c
+typedef enum {
+  ND_ADD,    // +
+  ND_SUB,    // -
+  ND_MUL,    // *
+  ND_DIV,    // /
+  ND_ASSIGN, // =
+  ND_LVAR,   // ローカル変数
+  ND_NUM,    // 整数
+} NodeKind;
+
+typedef struct Node Node;
+
+// 抽象構文木のノード
+struct Node {
+  NodeKind kind; // ノードの型
+  Node *lhs;     // 左辺
+  Node *rhs;     // 右辺
+  int val;       // kindがND_NUMの場合のみ使う
+  int offset;    // kindがND_LVARの場合のみ使う
+};
+```
+
+offset它是代表局部变量与基本指针的偏移量的成员。目前，变量a位于b固定位置，例如RBP-8，RBP-16⋯⋯等，因此可以在解析阶段确定偏移量。以下是读取标识符并ND_LVAR返回类型节点的代码。
+
+```c
+Node *primary() {
+  ...
+
+  Token *tok = consume_ident();
+  if (tok) {
+    Node *node = calloc(1, sizeof(Node));
+    node->kind = ND_LVAR;
+    node->offset = (tok->str[0] - 'a' + 1) * 8;
+    return node;
+  }
+
+  ...
+```
+
+>列：ASCII码
+>
+>在ASCII代码中，字符分配给0到127之间的数字。下表是ASCII代码中的字符分配表。
+>
+<div>
+<table>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">0</td>
+<td style="text-align: center;">NUL</td>
+<td style="text-align: center;">SOH</td>
+<td style="text-align: center;">STX</td>
+<td style="text-align: center;">ETX</td>
+<td style="text-align: center;">EOT</td>
+<td style="text-align: center;">ENQ</td>
+<td style="text-align: center;">ACK</td>
+<td style="text-align: center;">BEL</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">8</td>
+<td style="text-align: center;">BS</td>
+<td style="text-align: center;">HT</td>
+<td style="text-align: center;">NL</td>
+<td style="text-align: center;">VT</td>
+<td style="text-align: center;">NP</td>
+<td style="text-align: center;">CR</td>
+<td style="text-align: center;">SO</td>
+<td style="text-align: center;">SI</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">16</td>
+<td style="text-align: center;">DLE</td>
+<td style="text-align: center;">DC1</td>
+<td style="text-align: center;">DC2</td>
+<td style="text-align: center;">DC3</td>
+<td style="text-align: center;">DC4</td>
+<td style="text-align: center;">NAK</td>
+<td style="text-align: center;">SYN</td>
+<td style="text-align: center;">ETB</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">24</td>
+<td style="text-align: center;">CAN</td>
+<td style="text-align: center;">EM</td>
+<td style="text-align: center;">SUB</td>
+<td style="text-align: center;">ESC</td>
+<td style="text-align: center;">FS</td>
+<td style="text-align: center;">GS</td>
+<td style="text-align: center;">RS</td>
+<td style="text-align: center;">US</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">32</td>
+<td style="text-align: center;">sp</td>
+<td style="text-align: center;">!</td>
+<td style="text-align: center;">&quot;</td>
+<td style="text-align: center;">#</td>
+<td style="text-align: center;">$</td>
+<td style="text-align: center;">%</td>
+<td style="text-align: center;">&amp;</td>
+<td style="text-align: center;">&#39;</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">40</td>
+<td style="text-align: center;">(</td>
+<td style="text-align: center;">)</td>
+<td style="text-align: center;">*</td>
+<td style="text-align: center;">+</td>
+<td style="text-align: center;">,</td>
+<td style="text-align: center;">-</td>
+<td style="text-align: center;">.</td>
+<td style="text-align: center;">/</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">48</td>
+<td style="text-align: center;">0</td>
+<td style="text-align: center;">1</td>
+<td style="text-align: center;">2</td>
+<td style="text-align: center;">3</td>
+<td style="text-align: center;">4</td>
+<td style="text-align: center;">5</td>
+<td style="text-align: center;">6</td>
+<td style="text-align: center;">7</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">56</td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+<td style="text-align: center;">:</td>
+<td style="text-align: center;">;</td>
+<td style="text-align: center;">&lt;</td>
+<td style="text-align: center;">=</td>
+<td style="text-align: center;">&gt;</td>
+<td style="text-align: center;">?</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">64</td>
+<td style="text-align: center;">@</td>
+<td style="text-align: center;">A</td>
+<td style="text-align: center;">B</td>
+<td style="text-align: center;">C</td>
+<td style="text-align: center;">D</td>
+<td style="text-align: center;">E</td>
+<td style="text-align: center;">F</td>
+<td style="text-align: center;">G</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">72</td>
+<td style="text-align: center;">H</td>
+<td style="text-align: center;">I</td>
+<td style="text-align: center;">J</td>
+<td style="text-align: center;">K</td>
+<td style="text-align: center;">L</td>
+<td style="text-align: center;">M</td>
+<td style="text-align: center;">N</td>
+<td style="text-align: center;">O</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">80</td>
+<td style="text-align: center;">P</td>
+<td style="text-align: center;">Q</td>
+<td style="text-align: center;">R</td>
+<td style="text-align: center;">S</td>
+<td style="text-align: center;">T</td>
+<td style="text-align: center;">U</td>
+<td style="text-align: center;">V</td>
+<td style="text-align: center;">W</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">88</td>
+<td style="text-align: center;">X</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Z</td>
+<td style="text-align: center;">[</td>
+<td style="text-align: center;">\</td>
+<td style="text-align: center;">]</td>
+<td style="text-align: center;">^</td>
+<td style="text-align: center;">_</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">96</td>
+<td style="text-align: center;">`</td>
+<td style="text-align: center;">a</td>
+<td style="text-align: center;">b</td>
+<td style="text-align: center;">c</td>
+<td style="text-align: center;">d</td>
+<td style="text-align: center;">e</td>
+<td style="text-align: center;">f</td>
+<td style="text-align: center;">g</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">104</td>
+<td style="text-align: center;">h</td>
+<td style="text-align: center;">i</td>
+<td style="text-align: center;">j</td>
+<td style="text-align: center;">k</td>
+<td style="text-align: center;">l</td>
+<td style="text-align: center;">m</td>
+<td style="text-align: center;">n</td>
+<td style="text-align: center;">o</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">112</td>
+<td style="text-align: center;">p</td>
+<td style="text-align: center;">q</td>
+<td style="text-align: center;">r</td>
+<td style="text-align: center;">s</td>
+<td style="text-align: center;">t</td>
+<td style="text-align: center;">u</td>
+<td style="text-align: center;">v</td>
+<td style="text-align: center;">w</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">120</td>
+<td style="text-align: center;">x</td>
+<td style="text-align: center;">y</td>
+<td style="text-align: center;">z</td>
+<td style="text-align: center;">{</td>
+<td style="text-align: center;">|</td>
+<td style="text-align: center;">}</td>
+<td style="text-align: center;">~</td>
+<td style="text-align: center;">DEL</td>
+</tr>
+</tbody>
+</table>
+</div>
+>
+>控制字符在0到31之间。如今，除了NUL字符和换行符之外，几乎没有使用这种控制字符的机会，并且大多数控制字符仅占据了字符代码的主要位置，但是，当ASCII代码在1963年开发时，这些控制字符角色实际上很受欢迎。在ASCII标准制定时，甚至有一个提案试图将更多的控制字符放到小写字母5上。
+>
+>48-58被分配了数字，65-90被分配了大写字母，97-122被分配了小写字母。请注意，这些字符已分配给连续的代码。换句话说，0123456789和abcdefg ...在字符代码上是连续的。将定义顺序的字符放在这样一个连续的位置似乎是很自然的，但是在当时主要的字符代码（如EBCDIC）中，由于打孔卡的影响，字母在代码上是连续的。 。
+>
+>在C语言中，字符只是一个小整数类型，其含义与将对应于该字符的代码写为数字相同。换句话说，假设ASCII，例如'a'97'0'等于48。在上面的代码中，a有一个表达式可以从一个字符中减去一个数字，但是这样做可以让您计算一个给定字符与a相距多少个字符。这是一项只能完成的技术，因为字母是在ASCII码上连续排列的。
+
+#### 左值和右值
+
+与其他二进制运算符不同，赋值表达式需要专门处理左侧的值，因此让我们在此处进行说明。
+
+并非所有表达式都可以在赋值表达式的左侧使用。例如1=2，不能将1更改为2。a=2允许使用类似的赋值，但(a+1)=2类似的语句无效。指针和结构在9cc中尚不存在，但是如果确实存在*p=2，则对指针所指向的点的赋值（例如），或a.b=2对结构成员的赋值（例如，您必须原谅它是合法的）。我们如何区分合法和无效表达？
+
+这个问题有一个简单的答案。在C语言中，赋值表达式的左侧基本上只能是指定内存地址的表达式。
+
+由于变量存在于内存中并具有地址，因此可以将变量写在赋值的左侧。类似地，*p诸如的指针引用p也可以写在左侧，因为的值是地址。a.b结构的成员访问（例如也是存储器地址）a从b成员存在于内存中结构的起始位置开始偏移成员的地址，因此可以将其写在左侧。
+
+另一方面，a+1这样的表达式的结果不是变量，因此不能用作指定内存地址的表达式。这些临时值实际上可能仅存在于寄存器中而不存在于内存中，即使它们确实存在于内存中，也只能以与已知变量的固定偏移量进行访问，通常是不行的。因此，&(a+1)即使编写，例如，a+1也不允许获得结果地址，并且会出现编译错误。此类表达式不能写在赋值语句的左侧。
+
+可以写在左侧的值称为左值（sahenchi，左值），不可以写的值称为右值（uhenchi，右值）。左值和右值有时分别称为左值和右值。在我们目前的语言中，只有变量是左值，而所有其他值都是右值。
+
+生成变量的代码时，可以从左值开始。如果变量显示在分配的左侧，则将变量的地址计算为左侧的值，并为该地址存储右侧的评估结果。这使您可以实现赋值表达式。如果变量出现在其他任何上下文中，则可以通过以相同方式计算变量的地址，然后从该地址加载值，将左值转换为右值。这使您可以获取变量的值。
+
+#### 如何从任何地址加载值
+
+到目前为止，在代码生成中，仅访问了堆栈顶部的内存，但是使用局部变量，必须访问堆栈上的任何位置。本节介绍如何访问内存。
+
+CPU可以从内存中的任何地址加载和存储值，而不仅仅是堆栈的顶部。
+
+从内存加载值时mov dst, [src]，请使用以下语法：该指令的意思是“将src寄存器的值视为一个地址，从中加载该值，然后将其保存在dst中”。例如mov rdi, [rax]，您可以从RAX中的地址中加载值，并在RDI中进行设置。
+
+存储时mov [dst], src，请使用语法。该指令的意思是“将dst寄存器的值视为一个地址，并将src寄存器的值存储在该地址中”。例如mov [rdi], rax，您将RAX值存储在RDI包含的地址中。
+
+push由于和pop是隐式将RSP视为地址并访问内存的指令，因此实际上可以使用普通的内存访问指令用多条指令重写这些指令。换句话说，例如，pop rax它是
+
+```
+mov rax, [rsp]
+add rsp, 8
+```
+
+它与两条指令相同，push rax即
+
+```
+sub rsp, 8
+mov [rsp], rax
+```
+
+它与两条指令相同。
+
+#### 代码生成器更改
+
+有了这些知识，让我们修改代码生成器以处理包含变量的表达式。此更改添加了一个将表达式评估为左值的函数。下面代码中gen_lval的函数可以做到这一点。gen_lval计算给定变量的地址，并在给定节点指向它时将其压入堆栈。否则，将显示错误。这(a+1)=2将消除这种表达。
+
+当使用变量作为右值时，首先将其评估为右值，然后将堆栈顶部的计算结果视为一个地址，然后从该地址加载该值。代码如下所示。
+
+```c
+void gen_lval(Node *node) {
+  if (node->kind != ND_LVAR)
+    error("代入の左辺値が変数ではありません");
+
+  printf("  mov rax, rbp\n");
+  printf("  sub rax, %d\n", node->offset);
+  printf("  push rax\n");
+}
+
+void gen(Node *node) {
+  switch (node->kind) {
+  case ND_NUM:
+    printf("  push %d\n", node->val);
+    return;
+  case ND_LVAR:
+    gen_lval(node);
+    printf("  pop rax\n");
+    printf("  mov rax, [rax]\n");
+    printf("  push rax\n");
+    return;
+  case ND_ASSIGN:
+    gen_lval(node->lhs);
+    gen(node->rhs);
+
+    printf("  pop rdi\n");
+    printf("  pop rax\n");
+    printf("  mov [rax], rdi\n");
+    printf("  push rdi\n");
+    return;
+  }
+
+  gen(node->lhs);
+  gen(node->rhs);
+
+  printf("  pop rdi\n");
+  printf("  pop rax\n");
+
+  switch (node->kind) {
+  case '+':
+    printf("  add rax, rdi\n");
+    break;
+  case '-':
+    printf("  sub rax, rdi\n");
+    break;
+  case '*':
+    printf("  imul rax, rdi\n");
+    break;
+  case '/':
+    printf("  cqo\n");
+    printf("  idiv rdi\n");
+  }
+
+  printf("  push rax\n");
+}
+```
+
+#### 变更主要功能
+
+现在我们已经拥有了所有的部分，main让我们更改功能并实际运行编译器。
+
+```c
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    error("引数の個数が正しくありません");
+    return 1;
+  }
+
+  // トークナイズしてパースする
+  // 結果はcodeに保存される
+  user_input = argv[1];
+  tokenize();
+  program();
+
+  // アセンブリの前半部分を出力
+  printf(".intel_syntax noprefix\n");
+  printf(".globl main\n");
+  printf("main:\n");
+
+  // プロローグ
+  // 変数26個分の領域を確保する
+  printf("  push rbp\n");
+  printf("  mov rbp, rsp\n");
+  printf("  sub rsp, 208\n");
+
+  // 先頭の式から順にコード生成
+  for (int i = 0; code[i]; i++) {
+    gen(code[i]);
+
+    // 式の評価結果としてスタックに一つの値が残っている
+    // はずなので、スタックが溢れないようにポップしておく
+    printf("  pop rax\n");
+  }
+
+  // エピローグ
+  // 最後の式の結果がRAXに残っているのでそれが返り値になる
+  printf("  mov rsp, rbp\n");
+  printf("  pop rbp\n");
+  printf("  ret\n");
+  return 0;
+}
+```
+
