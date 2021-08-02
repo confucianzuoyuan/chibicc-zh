@@ -110,6 +110,25 @@ $ sudo apt install -y gcc make git binutils libc6-dev
 在Linux机器上编译出能够在Windows上运行的汇编代码，就是交叉编译器。
 \end{tcolorbox}
 
+\subsection{有关编译器的自举}
+
+可以这样理解。
+
+首先，设计C语言的规范。
+
+然后，使用汇编语言来开发一个C语言的编译器。
+
+第三，由于我们现在有了C语言的编译器了，所以可以使用这个C语言编译器来开发其他的C语言编译器。
+
+这就叫自举。
+
+\section{机器语言和汇编器}
+
+本章的目的是对构成计算机的组件以及应该从我们创建的C编译器输出什么样的代码有一个大概的了解。我还不会深入讲解具体的CPU指令。首先，了解概念很重要。
+
+
+
+
 \chapter{第一步：编译整数}
 
 先来编写main.c程序。
@@ -139,17 +158,17 @@ int main(int argc, char **argv) {
 然后编译main.c文件。使用如下命令：
 
 \begin{minted}{bash}
-    cc -std=c11 -g -fno-common -c -o main.o main.c
-    cc -o chibicc main.o
+$ cc -std=c11 -g -fno-common -c -o main.o main.c
+$ cc -o chibicc main.o
 \end{minted}
 
 编译出来的chibicc就是可执行程序。然后使用如下命令执行并查看结果：
 
 \begin{minted}{bash}
-    $ ./chibicc 233 > tmp.s
-    $ gcc -static -o tmp tmp.s
-    $ ./tmp
-    $ echo $?
+$ ./chibicc 233 > tmp.s
+$ gcc -static -o tmp tmp.s
+$ ./tmp
+$ echo $?
 \end{minted}
 
 然后会发现命令行出现了1这个整数，说明我们的编译器是成功的。
