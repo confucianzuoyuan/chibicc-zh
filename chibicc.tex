@@ -341,9 +341,72 @@ objdump我不知道所示的汇编代码中各个指令的含义，因为我还�
     \end{tcolorbox}
 \end{tcolorbox}
 
-\chapter{第一步：编译整数}
+\chapter{创建一个计算器级的语言}
 
-先来编写main.c程序。
+在本章中，创建C编译器的第一步是支持四个算术运算和其他算术运算符，以便我们可以编译如下表达式：
+
+\begin{minted}{text}
+30 + (4 - 2) * -5
+\end{minted}
+
+这似乎是一个相当简单的目标，但这实际上是一个相当困难的目标。公式具有以下结构：括号中的公式优先于加法，乘法优先于加法，如果您不了解它，将无法正确计算。但是，作为输入给出的公式只是一串扁平字符，而不是结构化数据。为了正确对表达式求值，必须分析字符序列并导出其中隐藏的结构。
+
+如果不先学习一些理论知识，这些解析问题将很难解决。实际上，这些问题曾经被认为是困难的，尤其是在1950和1970年代，当时对它们进行了积极的研究并开发了各种算法。由于有了结果，只要我们知道如何解析，解析就不再是一个难题。
+
+在本章中，它是最常见的解析算法之一“递归下降语法分析器”（递归下降解析）。我们每天使用的C/C++编译器（例如GCC和Clang）也使用递归下降解析。
+
+编程时经常需要读取具有某种结构的文本，而不仅仅是编译器需要读取这样的文本。本章中学习的技术可以直接用于此类问题。在本章中学到的解析技术并不夸张，而是正常的编程技术。阅读本章以了解算法，并以程序员的身份将解析技巧放到你的工具箱中吧。
+
+\section{步骤1：创建一种语言来编译一个整数}
+
+考虑一下C语言的最简单子集。您想象什么语言？main它是仅具有功能的语言吗？还是只有一种表达的语言？最后，只有一个整数的语言可能是最简单的子集。
+
+在这一步中，我们首先实现最简单的语言。
+
+在此步骤中创建的程序是一个编译器，该编译器从输入中读取一个数字并输出以该数字结尾的程序集作为程序的退出代码。换句话说，输入就像42一个字符串，当读取它时，它将创建一个输出以下程序集的编译器。
+
+\begin{minted}{c}
+.globl main
+
+main:
+        mov 42, %rax
+        ret
+\end{minted}
+
+你们在这里可能会认为“类似这样的程序不是编译器”。老实说，我也是这样认为的。但是，该程序接受由一个数字组成的语言作为输入，并输出与该数字相对应的代码，从定义上来说，这是一个很好的编译器。修改后，即使是这样一个简单的程序也可能变得非常复杂，因此让我们首先完成此步骤。
+
+实际上，此步骤对于整个开发过程而言非常重要。这是因为我们将在这一步中所做的工作用作未来开发的框架。在此步骤中，除了创建编译器本身之外，我们还将创建一个构建文件（Makefile），自动测试并设置一个git存储库。让我们逐一查看这些任务。
+
+本文档中创建的C编译器名为chibicc。cc是C编译器的缩写。chibi的意思是small的意思。当然，你可以给它取任何喜欢的名字。但是，不要事先考虑太多名称，否则我们将无法开始构建编译器。你可以稍后更改名称，包括GitHub存储库，因此可以使用合适的名称开头。
+
+\begin{tcolorbox}
+    \begin{tcolorbox}
+\textbf{专栏}：Intel表示法和AT＆T表示法
+
+称为AT\&T表示法的汇编器表示法在Unix上广泛使用。默认情况下，gcc和objdump输出程序集采用AT\&T表示法。
+
+在AT\&T表示法中，结果寄存器作为第二个参数。因此，在两个参数的指令中，参数以相反的顺序写入。用\%前缀\%rax写寄存器名称。用\$前缀\$42写数字，依此类推。
+
+同样，在引用内存时，请使用[]而不是()使用唯一的符号来编写表达式。以下是一些比较示例。
+
+\begin{minted}{as}
+mov rbp, rsp   // Intel
+mov %rsp, %rbp // AT&T
+
+mov rax, 8     // Intel
+mov $8, %rax   // AT&T
+
+mov [rbp + rcx * 4 - 8], rax // Intel
+mov %rax, -8(rbp, rcx, 4)    // AT&T
+\end{minted}
+
+对于这次我要制作的编译器，我决定使用AT\&T表示法会更加方便查看输出。AT\&T表示法和Intel表示法的表现力相同。无论使用哪种表示法，生成的机器语言指令序列都是相同的。
+    \end{tcolorbox}
+\end{tcolorbox}
+
+\subsection{创建编译器主体程序}
+
+通常，输入是作为文件提供给编译器的，但是由于在此处打开和读取文件很麻烦，因此我们会将数值直接提供给命令行程序的第一个参数。将第一个参数读取为数字并将其嵌入固定字符串组合的C程序可以很容易地编写如下。
 
 \begin{minted}{c}
 #include <stdio.h>
@@ -351,7 +414,7 @@ objdump我不知道所示的汇编代码中各个指令的含义，因为我还�
 
 int main(int argc, char **argv) {
   if (argc != 2) {
-    fprintf(stderr, "%s: 无效的参数个数\n", argv[0]);
+    fprintf(stderr, "%s: 参数个数不正确\n", argv[0]);
     return 1;
   }
 
@@ -362,6 +425,213 @@ int main(int argc, char **argv) {
   return 0;
 }
 \end{minted}
+
+创建名为chibicc的空文件夹，然后将以上代码写入chibicc.c文件。之后，如下所示执行chibicc并检查操作。
+
+\begin{minted}{bash}
+$ cc -o chibicc chibicc.c
+$ ./chibicc 123 > tmp.s
+\end{minted}
+
+我正在创建chibicc.c在第一行中编译chibicc的可执行文件。第二行将123输入传递给chibicc以生成一个汇编代码文件，并将其写入一个名为tmp.s的文件中。让我们检查一下tmp.s的内容。
+
+\begin{minted}{bash}
+$ cat tmp.s
+.globl main
+main:
+  mov 123, %rax
+  ret
+\end{minted}
+
+如你所见，它生成的代码很好。你可以通过将生成的汇编文件传递给汇编器来创建可执行文件。
+
+在Unix cc（或gcc）上，它应该是许多语言的前端，而不仅仅是C和C++，并且应该根据给定文件的扩展名确定语言，然后启动编译器或汇编器。因此，在这里，我们可以通过传递扩展名为.s的汇编代码文件进行汇编，就像编译chibicc时一样cc。以下是加载和执行生成的可执行文件的示例。
+
+\begin{minted}{bash}
+$ cc -o tmp tmp.s
+$ ./tmp
+$ echo $?
+123
+\end{minted}
+
+在shell程序中，可以使用名为\$?的变量访问上一个命令的退出码。在上面的示例中，显示的数字123与赋予chibicc的参数相同。换句话说，它运作良好。给它一个非123的数字，范围为0-255（Unix的退出代码应该为0-255），并查看chibicc是否真正起作用。
+
+\subsection{创建自动化测试}
+
+许多读者从未在他们的业余编程中编写过测试，但是在本书中，每次扩展编译器时，我们都会编写代码以测试新代码。起初编写测试可能会很麻烦，但是您很快就会发现自己对测试很感激。如果我们不编写测试代码，则每次必须手动运行相同的测试来检查操作，但是手动进行操作要麻烦得多。
+
+我认为编写测试很麻烦的印象来自测试框架的夸大和有时是教条式的测试思想。例如，诸如JUnit之类的测试框架具有许多有用的功能，但是部署和学习使用它们可能很棘手。因此，本章将不会介绍这样的测试框架。相反，我将在Shell脚本中编写一个非常简单的手写“测试框架”，并使用它来编写测试。
+
+以下是用于测试的Shell脚本test.sh。shell函数assert接受两个参数，即输入值和期望的输出值，并实际汇编chibicc结果并将实际结果与期望值进行比较。assert定义函数后，shell脚本将使用它来验证0和42是否正确编译。
+
+\begin{minted}{bash}
+#!/bin/bash
+assert() {
+  expected="$1"
+  input="$2"
+
+  ./chibicc "$input" > tmp.s
+  cc -o tmp tmp.s
+  ./tmp
+  actual="$?"
+
+  if [ "$actual" = "$expected" ]; then
+    echo "$input => $actual"
+  else
+    echo "$input => $expected expected, but got $actual"
+    exit 1
+  fi
+}
+
+assert 0 0
+assert 42 42
+
+echo OK
+\end{minted}
+
+test.sh使用以上内容创建chmod a+x test.sh并执行以使其可执行。test.sh让我们实际运行它。如果没有错误发生，则如下所示：test.sh最后一个OK并退出以显示。
+
+\begin{minted}{bash}
+$ ./test.sh
+0 => 0
+42 => 42
+OK
+\end{minted}
+
+如果发生错误，test.sh将OK不会显示。而是test.sh显示失败测试的期望值和实际值，如下所示：
+
+\begin{minted}{bash}
+$ ./test.sh
+0 => 0
+42 expected, but got 123
+\end{minted}
+
+如果要调试测试脚本，请-x使用选项bash运行脚本。-x使用该选项，bash将显示执行跟踪，如下所示。
+
+\begin{minted}{bash}
+$ bash -x test.sh
++ assert 0 0
++ expected=0
++ input=0
++ cc -o chibicc chibicc.c
++ ./chibicc 0
++ cc -o tmp tmp.s
++ ./tmp
++ actual=0
++ '[' 0 '!=' 0 ']'
++ assert 42 42
++ expected=42
++ input=42
++ cc -o chibicc chibicc.c
++ ./chibicc 42
++ cc -o tmp tmp.s
++ ./tmp
++ actual=42
++ '[' 42 '!=' 42 ']'
++ echo OK
+OK
+\end{minted}
+
+本书中使用的“测试框架”只是一个类似于上面的shell脚本。与完善的测试框架（例如JUnit）相比，该脚本似乎太简单了，但是此Shell脚本的简单性与chibicc本身的简单性保持了平衡，所以就这么简单。对于自动化测试，您所要做的就是一次移动代码并机械比较结果，因此重要的是不要太费力地思考并首先进行测试。
+
+\subsection{用make构建}
+
+在整本书中，读者将构建数百次甚至数千次chibicc。每次创建chibicc可执行文件然后运行测试脚本的任务都是相同的，因此将其留给工具很方便。make命令通常用于这些目的。
+
+Makefile执行该命令后，make会读取当前目录中一个名为的文件，并执行在该目录中编写的命令。Makefile由以冒号结尾的规则和该规则的一系列命令组成。以下Makefile是使您要在此步骤中执行的命令自动化的操作。
+
+\begin{minted}{makefile}
+CFLAGS=-std=c11 -g -static
+
+chibicc: chibicc.c
+
+test: chibicc
+        ./test.sh
+
+clean:
+        rm -f chibicc *.o *~ tmp*
+
+.PHONY: test clean
+\end{minted}
+
+在文件所在的chibicc.c目录中使用Makefile文件名创建上述文件。然后，make您只需make test执行即可创建chibicc，并通过执行来执行测试。由于make可以理解文件依赖关系，因此您无需chibicc.c在进行更改之后且make test在make运行之前运行它。仅当chibicc可执行文件早于chibicc.c时，Make才会在运行测试之前构建chibicc。
+
+make clean这是擦除临时文件的规则。rm您可能需要手工暂存文件，但是由于它们不方便且意外地擦除了您不想擦除的文件，即使Makefile您必须写入这些实用程序也是如此。
+
+请注意，Makefile中的缩进必须是制表符，这是一个作为编写时的警告。如果有4或8个空格，将发生错误。这只是一个不方便的语法，但是make是1970年代开发的一种旧工具，传统上就是这种方式。
+
+确保-static将选项传递给cc命令。此选项在“动态链接”一章中进行了介绍。您现在不必考虑此选项的含义。
+
+\subsection{用git进行版本控制}
+
+本书使用git作为版本控制系统。在本书中，您将逐步创建一个编译器，但是对于每一步，请执行git commit并编写一条提交消息。提交消息可以用中文显示，因此请务必在单行摘要中总结您实际更改的内容。如果要编写一个或多个详细说明，请在第一行之后打开一个空白行，然后再编写说明。
+
+只有您手动生成的文件才使用git进行版本控制。通过运行同一命令可以再次生成由于运行chibicc而生成的文件，因此无需将它们包含在版本控制中。而是，包括这些文件会不必要地延长每次提交的更改，因此您应将它们从版本控制中删除，而不要将其放在存储库中。
+
+在git中，.gitignore您可以在文件中编写要从版本控制中删除的文件的模式。chibicc.c在相同的目录中，.gitignore创建以下内容，并将git设置为忽略临时文件，编辑器备份文件等。
+
+\begin{minted}{text}
+*~
+*.o
+tmp*
+a.out
+chibicc
+\end{minted}
+
+如果您不熟悉git，请告诉git您的姓名和电子邮件地址。您在此处输入git的名称和电子邮件地址将记录在提交日志中。以下是设置作者姓名和电子邮件地址的示例。鼓励读者设置他们的姓名和电子邮件地址。
+
+\begin{minted}{bash}
+$ git config --global user.name "Rui Ueyama"
+$ git config --global user.email "ruiu@cs.stanford.edu"
+\end{minted}
+
+为了使用git进行提交，您首先git add需要使用来添加修改后的文件。由于这是第一次提交git init，因此请首先创建一个git存储库，然后使用来git add添加到目前为止已创建的所有文件。
+
+\begin{minted}{bash}
+$ git init
+Initialized empty Git repository in /home/ruiu/chibicc
+$ git add chibicc.c test.sh Makefile .gitignore
+\end{minted}
+
+然后git commit提交。
+
+\begin{minted}{bash}
+$ git commit -m "创建一个编译一个整数的编译器"
+\end{minted}
+
+-m（可选）指定提交消息。-m如果没有选项git，则启动编辑器。git log -p您可以通过执行以下命令来确认提交成功。
+
+\begin{minted}{bash}
+$ git log -p
+commit 0942e68a98a048503eadfee46add3b8b9c7ae8b1 (HEAD -> master)
+Author: Rui Ueyama <ruiu@cs.stanford.edu>
+Date:   Sat Aug 4 23:12:31 2018 +0000
+
+    创建一个编译一个整数的编译器
+
+diff --git a/chibicc.c b/chibicc.c
+new file mode 100644
+index 0000000..e6e4599
+--- /dev/null
++++ b/chibicc.c
+@@ -0,0 +1,16 @@
++#include <stdio.h>
++#include <stdlib.h>
++
++int main(int argc, char **argv) {
++  if (argc != 2) {
+...
+\end{minted}
+
+最后，让我们将到目前为止创建的git存储库上载到GitHub。没有特别的理由上传到GitHub，但是没有理由不上传到GitHub，GitHub也可以用作代码的备份。要上传到GitHub，请创建一个新的存储库（在本示例中，我们创建了一个rui314使用userchibicc调用的存储库），并使用以下命令将该存储库添加为远程存储库：
+
+\begin{minted}{bash}
+$ git remote add origin git@github.com:rui314/chibicc.git
+\end{minted}
+
+然后git push运行它以将您的存储库的内容推送到GitHub。git push运行后，在浏览器中打开GitHub并确保您的源代码已上传。
+
+这样就完成了创建编译器的第一步。此步骤中的编译器是一个很容易调用编译器的程序，但是它是一个很好的程序，其中包含编译器的所有必要元素。从现在开始，我们将继续扩展此编译器，尽管它仍然令人难以置信，但我们会将其发展成为一个好的C编译器。首先，请您乐意完成第一步。
 
 指令mov将整数移动到rax寄存器中，例如$\$1 \rightarrow \%rax$，就是将1这个整数移动到了rax寄存器中。
 
